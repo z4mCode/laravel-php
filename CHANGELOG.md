@@ -24,6 +24,20 @@ Bir deploy'u sabitlemen gerekiyorsa tarihli etiketi kullan: `:8.4-20260812`.
   WebP/JPEG/FreeType destegi var mi, php.ini limitleri uygulanmis mi.
 - Haftalik zamanlanmis yeniden build (guvenlik yamalari icin).
 
+### Duzeltildi
+- nginx spool dizinleri (`/var/lib/nginx`, `/var/log/nginx`, `/run/nginx`) artik
+  `www-data`'ya ait. Alpine'in nginx paketi bunlari `nginx` kullanicisina ait
+  olusturuyor, oysa Laravel kurulumlari php-fpm ile ayni kullaniciyi paylasmak
+  icin nginx.conf'ta `user www-data;` kullaniyor. Sonuc: worker istek govdesini
+  diske yazamiyor ve dosya yuklemeleri 500 donuyordu.
+
+      [crit] open() "/var/lib/nginx/tmp/client_body/0000000001" failed
+             (13: Permission denied)
+
+  nginx kucuk govdeleri bellekte tuttugu icin hata yalnizca birkac yuz KB'i asan
+  yuklemelerde ortaya cikiyordu; kucuk istekler sorunsuz geciyordu. CI artik hem
+  dizin sahipligini hem de www-data'nin yazabildigini dogruluyor.
+
 ### Degisti
 - `mlocati/php-extension-installer` `:latest` yerine `:2` major etiketine
   sabitlendi.

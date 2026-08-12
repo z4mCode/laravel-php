@@ -98,6 +98,21 @@ FROM base AS fpm-nginx
 
 RUN apk add --no-cache nginx supervisor
 
+# Alpine'in nginx paketi /var/lib/nginx dizinini `nginx` kullanicisina ait
+# olusturur. Laravel kurulumlari php-fpm ile ayni kullaniciyi paylasmak icin
+# nginx.conf'ta `user www-data;` kullanir; bu durumda worker'lar istek govdesini
+# spool dizinine yazamaz:
+#
+#   [crit] open() "/var/lib/nginx/tmp/client_body/0000000001" failed
+#          (13: Permission denied)
+#   POST /livewire/upload-file -> 500
+#
+# Sinsi tarafi: nginx kucuk govdeleri client_body_buffer_size kadar bellekte
+# tutar, diske hic yazmaz. Bu yuzden kucuk istekler sorunsuz gecer ve hata
+# yalnizca birkac yuz KB'i asan dosya yuklemelerinde ortaya cikar.
+RUN mkdir -p /var/lib/nginx/tmp /var/log/nginx /run/nginx \
+    && chown -R www-data:www-data /var/lib/nginx /var/log/nginx /run/nginx
+
 # supervisorctl konfigurasyonu /etc/supervisor/conf.d/ altinda aramaz; uygulama
 # repolari config'i oraya kopyaladigi icin symlink'i burada hazir tutuyoruz.
 RUN mkdir -p /etc/supervisor/conf.d \

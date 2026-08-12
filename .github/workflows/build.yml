@@ -217,4 +217,27 @@ jobs:
             echo "== nginx & supervisor =="
             docker run --rm --platform linux/amd64 "$IMAGE" nginx -v
             docker run --rm --platform linux/amd64 "$IMAGE" supervisord --version
+
+            echo "== nginx spool dizinleri www-data'ya ait mi =="
+            # Uygulama nginx.conf'lari `user www-data;` kullaniyor. Bu dizinler
+            # nginx kullanicisinda kalirsa worker istek govdesini diske yazamaz
+            # ve birkac yuz KB'i asan dosya yuklemeleri 500 doner.
+            docker run --rm --platform linux/amd64 "$IMAGE" sh -c '
+              fail=0
+              for d in /var/lib/nginx /var/log/nginx /run/nginx; do
+                owner=$(stat -c "%U" "$d" 2>/dev/null || echo YOK)
+                printf "%-18s %s\n" "$d" "$owner"
+                [ "$owner" = "www-data" ] || fail=1
+              done
+              [ "$fail" = "0" ] || { echo "spool dizin sahipligi yanlis" >&2; exit 1; }
+              echo "sahiplik dogru"
+            '
+
+            echo "== www-data spool dizinine yazabiliyor mu =="
+            docker run --rm --platform linux/amd64 -u www-data "$IMAGE" sh -c '
+              mkdir -p /var/lib/nginx/tmp/client_body \
+                && touch /var/lib/nginx/tmp/client_body/__probe \
+                && rm /var/lib/nginx/tmp/client_body/__probe \
+                && echo yazilabilir
+            '
           fi
