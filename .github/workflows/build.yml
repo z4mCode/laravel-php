@@ -76,7 +76,7 @@ jobs:
 
       - name: QEMU (arm64 emulasyonu)
         if: steps.gate.outputs.skip == 'false'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Buildx
         if: steps.gate.outputs.skip == 'false'
