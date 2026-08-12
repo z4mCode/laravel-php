@@ -8,7 +8,9 @@ name: Build & Publish
 #   dispatch    Elle tetikleme.
 on:
   push:
-    branches: [main]
+    # Repo master ile olusturuldu, diger projeler main kullaniyor. Dal adi
+    # tek bir seye sabitlenirse buradan sadelestirilebilir.
+    branches: [main, master]
     paths:
       - 'Dockerfile'
       - 'conf/**'
