@@ -1,0 +1,7 @@
+.git
+.github
+docs
+README.md
+CHANGELOG.md
+Makefile
+.editorconfig

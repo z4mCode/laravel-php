@@ -1,0 +1,44 @@
+#!/bin/sh
+# php-fpm'i HTTP katmani olmadan yoklar.
+#
+# Kullanim (Dockerfile):
+#   HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD php-fpm-healthcheck
+#
+# Varsayilan olarak 127.0.0.1:9000 denenir. Farkli bir adres icin:
+#   FPM_ADDR=/run/php-fpm.sock php-fpm-healthcheck
+#
+# php-fpm.conf icinde ping yolu tanimliysa (pm.status_path / ping.path) onu
+# kullanir; tanimli degilse FastCGI baglantisinin kurulabilmesi yeterli sayilir.
+
+set -e
+
+FPM_ADDR="${FPM_ADDR:-127.0.0.1:9000}"
+FPM_PING_PATH="${FPM_PING_PATH:-/ping}"
+
+if ! command -v cgi-fcgi >/dev/null 2>&1; then
+    echo "php-fpm-healthcheck: cgi-fcgi bulunamadi (apk add fcgi)" >&2
+    exit 1
+fi
+
+case "$FPM_ADDR" in
+    /*) CONNECT_ARG="-connect $FPM_ADDR" ;;
+    *)  CONNECT_ARG="-connect $FPM_ADDR" ;;
+esac
+
+OUT=$(
+    SCRIPT_NAME="$FPM_PING_PATH" \
+    SCRIPT_FILENAME="$FPM_PING_PATH" \
+    REQUEST_METHOD=GET \
+    cgi-fcgi -bind $CONNECT_ARG 2>&1
+) || {
+    echo "php-fpm-healthcheck: $FPM_ADDR adresine baglanilamadi" >&2
+    exit 1
+}
+
+# ping.path tanimliysa govde "pong" doner. Tanimli degilse php-fpm 404 uretir —
+# bu da surecin ayakta ve istek karsiladigi anlamina gelir, saglikli sayariz.
+case "$OUT" in
+    *pong*) exit 0 ;;
+    *"404"*|*"Status: 404"*) exit 0 ;;
+    *) echo "$OUT" >&2; exit 1 ;;
+esac

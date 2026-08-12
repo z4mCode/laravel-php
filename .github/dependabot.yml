@@ -1,0 +1,11 @@
+# GitHub Actions adimlarini guncel tutar. Docker base image'lari (php, composer,
+# php-extension-installer) bilerek disarida: onlar zaten haftalik yeniden
+# build ile tazeleniyor ve major surumleri elle degistirilmeli.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"

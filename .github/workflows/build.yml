@@ -1,0 +1,218 @@
+name: Build & Publish
+
+# Uc tetikleyici:
+#   push        Dockerfile ya da conf/ degistiginde yeniden yayinlar.
+#   schedule    Haftalik yeniden build. Upstream php:X-fpm-alpine ve Alpine
+#               paketleri guvenlik yamalarini bu sayede alir; kod degismese de
+#               image tazelenir.
+#   dispatch    Elle tetikleme.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'conf/**'
+      - 'bin/**'
+      - '.github/workflows/build.yml'
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      php_version:
+        description: 'Yalnizca bu PHP surumunu build et (bos = hepsi)'
+        required: false
+        default: ''
+      platforms:
+        description: 'Hedef mimariler'
+        required: false
+        type: choice
+        default: 'linux/amd64,linux/arm64'
+        options:
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: z4mcode/laravel-php
+  # :latest ve :latest-cli etiketlerinin isaret ettigi surum.
+  DEFAULT_PHP: '8.4'
+  # arm64 QEMU emulasyonuyla kurulur ve extension derlemesi orada belirgin
+  # sekilde yavastir. Uretim sunucusu x86_64; arm64 yalnizca Apple Silicon'da
+  # yerel kullanim icin yayinlaniyor. Maliyet sorun olursa workflow_dispatch
+  # uzerinden yalnizca amd64 secilebilir ya da bu varsayilan daraltilabilir.
+  DEFAULT_PLATFORMS: 'linux/amd64,linux/arm64'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      # Bir surum patlarsa digerleri tamamlansin; kismi yayin, hic yayin
+      # yapmamaktan iyidir.
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        variant: [fpm-nginx, cli]
+
+    name: PHP ${{ matrix.php }} · ${{ matrix.variant }}
+
+    steps:
+      - name: Bu surum atlanacak mi
+        id: gate
+        run: |
+          WANTED='${{ github.event.inputs.php_version }}'
+          if [ -n "$WANTED" ] && [ "$WANTED" != '${{ matrix.php }}' ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "PHP ${{ matrix.php }} atlaniyor (yalnizca $WANTED istendi)"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip == 'false'
+
+      - name: QEMU (arm64 emulasyonu)
+        if: steps.gate.outputs.skip == 'false'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Buildx
+        if: steps.gate.outputs.skip == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      - name: GHCR girisi
+        if: steps.gate.outputs.skip == 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Etiketleri hesapla
+        if: steps.gate.outputs.skip == 'false'
+        id: meta
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          PHP='${{ matrix.php }}'
+          VARIANT='${{ matrix.variant }}'
+          DATE=$(date -u +%Y%m%d)
+
+          # fpm-nginx varsayilan varyant: sade etiket (8.4) onu gosterir.
+          if [ "$VARIANT" = "fpm-nginx" ]; then
+            SUFFIX=""
+          else
+            SUFFIX="-${VARIANT}"
+          fi
+
+          TAGS="${IMAGE}:${PHP}${SUFFIX}"
+          # Tarihli etiket: bir deploy'u belirli bir base image'a sabitlemek icin.
+          TAGS="${TAGS},${IMAGE}:${PHP}${SUFFIX}-${DATE}"
+          # Acik varyant etiketi, sade etiketin ne oldugunu belirsiz birakmasin.
+          if [ "$VARIANT" = "fpm-nginx" ]; then
+            TAGS="${TAGS},${IMAGE}:${PHP}-fpm-nginx"
+          fi
+          if [ "$PHP" = "${DEFAULT_PHP}" ]; then
+            TAGS="${TAGS},${IMAGE}:latest${SUFFIX}"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Etiketler:"; echo "${TAGS}" | tr ',' '\n' | sed 's/^/  /'
+
+      - name: Build & push
+        if: steps.gate.outputs.skip == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.variant }}
+          build-args: |
+            PHP_VERSION=${{ matrix.php }}
+          platforms: ${{ github.event.inputs.platforms || env.DEFAULT_PLATFORMS }}
+          push: true
+          # Attestation ve SBOM manifest'leri export suresini uzatiyor ve
+          # Coolify tarafinda bir isimize yaramiyor.
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Laravel icin paylasilan PHP ${{ matrix.php }} base image (${{ matrix.variant }})
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha,scope=${{ matrix.php }}-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.php }}-${{ matrix.variant }}
+
+      - name: Duman testi
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_NAME}:${{ matrix.php }}"
+          if [ '${{ matrix.variant }}' != 'fpm-nginx' ]; then
+            IMAGE="${IMAGE}-${{ matrix.variant }}"
+          fi
+
+          echo "== PHP surumu =="
+          docker run --rm --platform linux/amd64 "$IMAGE" php -v
+
+          echo "== Extension'lar =="
+          docker run --rm --platform linux/amd64 "$IMAGE" php -m
+
+          echo "== Beklenen extension'lar yuklu mu =="
+          docker run --rm --platform linux/amd64 "$IMAGE" php -r '
+            $required = ["redis","igbinary","gd","pdo_mysql","pdo_sqlite","zip","bcmath","intl","soap","exif","Zend OPcache","pcntl","sockets"];
+            $missing = [];
+            foreach ($required as $e) {
+              if (!extension_loaded($e)) { $missing[] = $e; }
+            }
+            if ($missing) {
+              fwrite(STDERR, "Eksik extension: " . implode(", ", $missing) . "\n");
+              exit(1);
+            }
+            echo "hepsi yuklu\n";
+          '
+
+          echo "== GD format destegi (WebP dahil) =="
+          docker run --rm --platform linux/amd64 "$IMAGE" php -r '
+            $gd = gd_info();
+            $need = ["WebP Support","JPEG Support","PNG Support","FreeType Support"];
+            $missing = [];
+            foreach ($need as $k) {
+              if (empty($gd[$k])) { $missing[] = $k; }
+            }
+            if ($missing) {
+              fwrite(STDERR, "GD eksik: " . implode(", ", $missing) . "\n");
+              exit(1);
+            }
+            if (!function_exists("imagewebp")) {
+              fwrite(STDERR, "imagewebp() yok\n");
+              exit(1);
+            }
+            echo "GD tam destekli\n";
+          '
+
+          echo "== php.ini limitleri uygulandi mi =="
+          docker run --rm --platform linux/amd64 "$IMAGE" php -r '
+            $checks = [
+              "upload_max_filesize" => "1G",
+              "post_max_size"       => "1G",
+              "memory_limit"        => "512M",
+            ];
+            foreach ($checks as $k => $expected) {
+              $actual = ini_get($k);
+              if ($actual !== $expected) {
+                fwrite(STDERR, "$k = $actual (beklenen $expected)\n");
+                exit(1);
+              }
+            }
+            echo "limitler dogru\n";
+          '
+
+          echo "== composer =="
+          docker run --rm --platform linux/amd64 "$IMAGE" composer --version
+
+          if [ '${{ matrix.variant }}' = 'fpm-nginx' ]; then
+            echo "== nginx & supervisor =="
+            docker run --rm --platform linux/amd64 "$IMAGE" nginx -v
+            docker run --rm --platform linux/amd64 "$IMAGE" supervisord --version
+          fi
