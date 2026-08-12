@@ -80,7 +80,7 @@ jobs:
 
       - name: Buildx
         if: steps.gate.outputs.skip == 'false'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: GHCR girisi
         if: steps.gate.outputs.skip == 'false'
